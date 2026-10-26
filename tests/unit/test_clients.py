@@ -1,5 +1,6 @@
 """Unit tests for Forager and HubSpot API clients with mocked HTTP calls."""
 
+import json
 import httpx
 import pytest
 import respx
@@ -38,6 +39,23 @@ async def test_forager_search_organization_success(sample_forager_org):
     result = await client.search_organization("openai.com")
     assert result is not None
     assert result["name"] == "OpenAI"
+    await client.close()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_forager_search_people_quotes_multiword_role_titles():
+    """Forager expects multiword role titles as boolean phrase searches."""
+    route = respx.post(
+        "https://api-v2.forager.ai/api/123/datastorage/person_role_search/"
+    ).respond(status_code=200, json={"search_results": []})
+
+    client = ForagerClient(api_key="test_key", account_id=123)
+    await client.search_people_by_role("openai.com", "Software Engineer")
+
+    payload = json.loads(route.calls.last.request.content)
+    assert payload["role_title"] == '"Software Engineer"'
+    assert payload["organization_domains"] == ["openai.com"]
     await client.close()
 
 

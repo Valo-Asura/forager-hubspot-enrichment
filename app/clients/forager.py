@@ -168,9 +168,16 @@ class ForagerClient:
         endpoint = f"/api/{account_id}/datastorage/person_role_search/"
         clean_domain = domain.lower().replace("https://", "").replace("http://", "").split("/")[0]
 
+        # Forager parses role_title as a boolean text-search expression. Plain
+        # multiword titles such as "Software Engineer" are rejected as an
+        # incomplete expression, so send configured role labels as phrases.
+        role_query = role_title.strip()
+        if role_query and not (role_query.startswith('"') and role_query.endswith('"')):
+            role_query = f'"{role_query.replace(chr(34), chr(92) + chr(34))}"'
+
         payload = {
             "organization_domains": [clean_domain],
-            "role_title": role_title,
+            "role_title": role_query,
             "role_is_current": is_current,
             "page": page,
         }
