@@ -81,6 +81,59 @@ async def test_company_webhook_success_and_deduplication():
 
 
 @pytest.mark.asyncio
+async def test_company_webhook_retry_attempt_is_deduplicated():
+    """A HubSpot retry with an incremented attempt number is the same event."""
+    payload = [{
+        "eventId": 1002,
+        "subscriptionId": 12,
+        "portalId": 34,
+        "subscriptionType": "company.creation",
+        "objectId": 5678,
+        "occurredAt": 1700000000000,
+        "attemptNumber": 0,
+    }]
+    body0 = json.dumps(payload).encode()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        secret = "retry-test-secret"
+        app.state.hubspot_client.client_secret = secret
+        url = "http://test/webhooks/hubspot/companies"
+        timestamp0 = str(int(time.time() * 1000))
+        headers0 = {
+            "Content-Type": "application/json",
+            "X-HubSpot-Signature-v3": create_hubspot_v3_signature(
+                client_secret=secret,
+                method="POST",
+                url=url,
+                body=body0.decode(),
+                timestamp=timestamp0,
+            ),
+            "X-HubSpot-Request-Timestamp": timestamp0,
+        }
+        response0 = await client.post("/webhooks/hubspot/companies", content=body0, headers=headers0)
+        assert response0.status_code == 200, response0.text
+        assert response0.json()["events_dispatched"] == 1, response0.text
+
+        payload[0]["attemptNumber"] = 1
+        body1 = json.dumps(payload).encode()
+        timestamp1 = str(int(time.time() * 1000))
+        headers1 = {
+            "Content-Type": "application/json",
+            "X-HubSpot-Signature-v3": create_hubspot_v3_signature(
+                client_secret=secret,
+                method="POST",
+                url=url,
+                body=body1.decode(),
+                timestamp=timestamp1,
+            ),
+            "X-HubSpot-Request-Timestamp": timestamp1,
+        }
+        response1 = await client.post("/webhooks/hubspot/companies", content=body1, headers=headers1)
+        assert response1.json()["events_dispatched"] == 0
+        assert response1.json()["events_skipped"] == 1
+
+
+@pytest.mark.asyncio
 async def test_contact_webhook_signature_failure():
     """Test contact webhook rejection with 401 on forged signature."""
     transport = httpx.ASGITransport(app=app)

@@ -74,7 +74,7 @@ Built in Python using FastAPI, Uvicorn, httpx, and Pydantic. **Zero no-code tool
 ### 1. Forager.ai API (v2)
 * **Base URL:** `https://api-v2.forager.ai`
 * **Authentication Header:** `X-API-KEY: <FORAGER_API_KEY>`
-* **Account Resolution:** `GET /api/users/current/` retrieves the active account ID dynamically if `FORAGER_ACCOUNT_ID` is not explicitly set.
+* **Account ID:** Set `FORAGER_ACCOUNT_ID` to the numeric ID shown on the Forager app's My Account page. The documented data endpoints require this path parameter.
 * **Organization Search:**
   * `POST /api/{account_id}/datastorage/organization_search/`
   * Body: `{"domains": ["openai.com"], "page": 0}`
@@ -203,8 +203,8 @@ Interactive OpenAPI documentation will be accessible at: `http://localhost:8000/
 |---|---|---|---|
 | `FORAGER_API_KEY` | Yes | `""` | API key from app.forager.ai |
 | `FORAGER_BASE_URL` | No | `https://api-v2.forager.ai` | Base URL for Forager v2 |
-| `FORAGER_ACCOUNT_ID`| No | Auto-resolved | Numeric account ID; resolved via `/api/users/current/` if omitted |
-| `HUBSPOT_ACCESS_TOKEN` | Yes | `""` | Private App Bearer Token |
+| `FORAGER_ACCOUNT_ID`| Yes | — | Numeric account ID shown on the Forager app's My Account page |
+| `HUBSPOT_ACCESS_TOKEN` | Yes | `""` | HubSpot Service Key with company/contact read and write scopes |
 | `HUBSPOT_CLIENT_SECRET` | For Webhooks | `""` | App client secret for SHA-256 HMAC signature validation |
 | `HUBSPOT_BASE_URL` | No | `https://api.hubapi.com` | Base URL for HubSpot CRM |
 | `ALLOWED_JOB_TITLES` | No | `Software Engineer,VP of Engineering,CTO,Product Manager` | Comma-separated title filters |
@@ -216,7 +216,7 @@ Interactive OpenAPI documentation will be accessible at: `http://localhost:8000/
 
 ## Running Tests
 
-The test suite contains **44 unit and integration tests** testing field mapping, title filtering, candidate deduplication, webhook signature checks, and full end-to-end workflows. Tests use `respx` and never depend on live external credentials.
+The test suite contains **46 unit and integration tests** testing field mapping, title filtering, candidate deduplication, webhook signature checks, retry deduplication, and mocked end-to-end flows. Tests use `respx` and never depend on live external credentials. These are not live provider integration tests.
 
 Run all tests:
 ```bash
@@ -230,18 +230,29 @@ tests/integration/test_contact_enrichment.py::test_enrich_contact_full_flow PASS
 tests/integration/test_webhooks.py::test_health_endpoint PASSED
 tests/integration/test_webhooks.py::test_root_endpoint PASSED
 tests/integration/test_webhooks.py::test_company_webhook_success_and_deduplication PASSED
+tests/integration/test_webhooks.py::test_company_webhook_retry_attempt_is_deduplicated PASSED
 tests/integration/test_webhooks.py::test_contact_webhook_signature_failure PASSED
 tests/unit/test_clients.py::test_forager_get_account_id_cached PASSED
-tests/unit/test_clients.py::test_forager_resolve_account_id_api PASSED
+tests/unit/test_clients.py::test_forager_account_id_required PASSED
 tests/unit/test_clients.py::test_forager_search_organization_success PASSED
 tests/unit/test_clients.py::test_hubspot_get_company PASSED
 tests/unit/test_clients.py::test_hubspot_association_v4_success PASSED
 tests/unit/test_discovery.py (23 parameterized title tests) PASSED
 tests/unit/test_mapping.py (6 mapping & location tests) PASSED
-tests/unit/test_signatures.py (4 signature verification tests) PASSED
+tests/unit/test_signatures.py (5 signature verification tests) PASSED
 
-============================== 44 passed in 1.06s ==============================
+============================== 46 passed ==============================
 ```
+
+### Current Validation Snapshot (2026-10-26)
+
+* Local automated suite: **46 passed** (mocked unit and integration tests).
+* Live local service: `/health`, `/docs`, and `/openapi.json` returned HTTP 200.
+* HubSpot schema preflight: all 10 required company properties and 11 required contact properties exist.
+* OpenAI demo company: existing record verified (HubSpot ID `356231950027`, `name=OpenAI`, `domain=openai.com`); Forager enrichment updated 9 company properties.
+* Live contact discovery: 2 contacts synchronized in this run; the company now has **5 associated contacts** total. Validation found **0 duplicates** and passed.
+* Environment: Forager API key/account ID and HubSpot Service Key are configured in the ignored `.env`. `HUBSPOT_CLIENT_SECRET` is blank; CRM enrichment works, but HubSpot-signed webhook requests cannot be validated until the app client secret is configured.
+* Webhook endpoints: both company and contact endpoints rejected unsigned local requests with HTTP 401. Mocked signature and retry/deduplication tests pass; signed live webhook delivery and Railway deployment remain unverified. Railway CLI is not installed in this environment.
 
 ---
 
@@ -276,7 +287,8 @@ tests/unit/test_signatures.py (4 signature verification tests) PASSED
   $$\text{HMAC-SHA256}(\text{client\_secret}, \text{HTTP\_METHOD} + \text{URI} + \text{BODY} + \text{TIMESTAMP})$$
 * Timestamp freshness check: Rejects requests older than 300 seconds (5 minutes) to defeat replay attacks.
 * Automatic fallback support for HubSpot v1 signature.
-* Idempotent delivery protection: Prevents duplicate execution from webhook retries.
+* Fail-closed behavior: requests are rejected if the client secret is missing or the signature is invalid.
+* In-process delivery deduplication: repeated event IDs are skipped across retry attempts while the process is running.
 * Recursive update loop prevention: 30-second cooldown window prevents webhooks from reacting to our own CRM updates.
 
 ---
@@ -325,6 +337,7 @@ railway up
 ### 2. Configure Environment Variables in Railway Dashboard
 In Railway -> Project Settings -> Variables, add:
 * `FORAGER_API_KEY`
+* `FORAGER_ACCOUNT_ID`
 * `HUBSPOT_ACCESS_TOKEN`
 * `HUBSPOT_CLIENT_SECRET`
 * `ALLOWED_JOB_TITLES`
@@ -333,8 +346,10 @@ In Railway -> Project Settings -> Variables, add:
 
 ### 3. Configure HubSpot Webhooks
 1. In HubSpot Developer Portal / App Settings, navigate to **Webhooks**.
-2. Target Webhook URL: `https://<YOUR-RAILWAY-APP>.up.railway.app/webhooks/hubspot`
-3. Create Webhook Subscriptions:
+2. Set the webhook targets to these routes:
+   * `https://<YOUR-RAILWAY-APP>.up.railway.app/webhooks/hubspot/companies`
+   * `https://<YOUR-RAILWAY-APP>.up.railway.app/webhooks/hubspot/contacts`
+3. Create Webhook Subscriptions for the matching routes:
    * **Company created** (`company.creation`)
    * **Contact created** (`contact.creation`)
 4. Verify `/health` on production URL:
@@ -346,11 +361,13 @@ In Railway -> Project Settings -> Variables, add:
 
 ## Known Provider Limitations
 
-1. **Personal Direct Dials & Cell Phones:**
+1. **Webhook worker and idempotency state are process-local:**
+   * FastAPI `BackgroundTasks` and the deduplication/cooldown caches are in memory. A restart or multiple Railway replicas can lose or split that state. Use a durable queue and shared store before relying on this for production delivery guarantees.
+2. **Personal Direct Dials & Cell Phones:**
    * B2B providers do not always have verified mobile phone numbers for every individual due to privacy regulations (GDPR/CCPA). Where Forager returns no phone number, the field remains empty and is logged in `missing_fields`.
-2. **Work Email Async Enrichment:**
+3. **Work Email Async Enrichment:**
    * Work email generation in Forager uses an asynchronous lookup job (`POST /api/v2/{account_id}/datastorage/person_contacts_lookup/work_emails/`) returning `202 Accepted`. Our client polls up to 3 times before falling back to personal emails or reporting missing.
-3. **LinkedIn Identifier Variations:**
+4. **LinkedIn Identifier Variations:**
    * Some public profiles use alphanumeric hashes rather than named slugs. The integration automatically strips URL query parameters and handles both formats.
 
 ---
@@ -379,8 +396,8 @@ Use this concise script for the Loom/screen recording:
 | Timestamp | Screen | Speaking Script |
 |---|---|---|
 | **0:00 - 0:30** | Code repository & Architecture | *"Hi team, here is the custom Python integration connecting Forager and HubSpot. Built cleanly with FastAPI, httpx, and Pydantic with zero no-code dependencies."* |
-| **0:30 - 1:00** | Test Suite Execution | *"Let's run `pytest -v`. All 44 unit and integration tests pass, covering field mapping, title variation matching, v3 signature validation, and deduplication."* |
-| **1:00 - 1:45** | OpenAI Company & Contact Enrichment | *"Running `python scripts/enrich_demo_company.py`. It locates OpenAI in HubSpot, enriches description, revenue, employee count, and LinkedIn URL from Forager, then discovers 5 tech leaders matching our job-title filters and associates them."* |
-| **1:45 - 2:30** | HubSpot CRM Verification | *"Opening HubSpot CRM. Here is OpenAI with full details populated. Viewing the 5 associated contacts: first/last name, job title, email, phone, location, and LinkedIn URL are accurately mapped without duplicates."* |
-| **2:30 - 3:15** | Live Webhook Demonstration | *"Demonstrating the live Railway service. When a new company or contact is created in HubSpot, HubSpot fires a signed webhook. Our service verifies the SHA-256 HMAC v3 signature, checks replay timestamp, avoids recursive loops, and enriches in the background."* |
-| **3:15 - 3:45** | Extra Forager Fields & Wrap-up | *"Lastly, Forager surfaces great extra signals like technographics, funding events, and skills. We can easily map these to custom properties. Thanks for watching!"* |
+| **0:30 - 1:00** | Test Suite Execution | *"Let's run `pytest -v`. All 46 mocked unit and integration tests pass, covering field mapping, title variation matching, v3 signature validation, and retry deduplication."* |
+| **1:00 - 1:45** | OpenAI Company & Contact Enrichment | *"The live run updated nine available company properties and synchronized two matching contacts. The contact limit is five, and this run found two new matches."* |
+| **1:45 - 2:30** | HubSpot CRM Verification | *"The OpenAI record now has five associated contacts. The audit found no duplicates. Fields that Forager does not provide remain empty rather than being guessed."* |
+| **2:30 - 3:15** | Webhook Validation | *"The automated tests cover valid signatures, signature rejection, and retry deduplication. The live endpoint rejects unsigned requests with HTTP 401. Live signed delivery still needs the HubSpot app client secret and a deployed service."* |
+| **3:15 - 3:45** | Wrap-up | *"The local integration and live CRM enrichment are validated. Deployment and signed live webhook delivery are the remaining submission steps."* |

@@ -80,7 +80,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if not settings.HUBSPOT_ACCESS_TOKEN:
         logger.warning("HUBSPOT_ACCESS_TOKEN is not configured. Live HubSpot calls will fail.")
     if not settings.HUBSPOT_CLIENT_SECRET:
-        logger.warning("HUBSPOT_CLIENT_SECRET is not configured. Webhook signature checks will be skipped.")
+        logger.warning("HUBSPOT_CLIENT_SECRET is not configured. Signed HubSpot webhook requests will be rejected.")
 
     yield
 

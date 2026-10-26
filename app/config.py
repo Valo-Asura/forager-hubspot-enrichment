@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     )
     FORAGER_ACCOUNT_ID: Optional[int] = Field(
         default=None,
-        description="Numeric Forager Account ID. If omitted, resolved via /api/users/current/",
+        description="Numeric Forager Account ID from the Forager app's My Account page",
     )
 
     # HubSpot credentials and endpoints

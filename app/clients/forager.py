@@ -128,19 +128,12 @@ class ForagerClient:
                 ) from exc
 
     async def get_account_id(self) -> int:
-        """Resolve and cache the primary numeric account ID from /api/users/current/."""
+        """Return the configured numeric account ID required by Forager endpoints."""
         if self.account_id is not None:
             return self.account_id
-
-        logger.info("Resolving Forager account ID via /api/users/current/...")
-        data = await self._request("GET", "/api/users/current/")
-        accounts = data.get("accounts", [])
-        if not accounts:
-            raise ForagerAPIError("No active accounts found for this Forager API key.")
-        
-        self.account_id = accounts[0]["id"]
-        logger.info(f"Resolved Forager account ID: {self.account_id}")
-        return self.account_id
+        raise ForagerAPIError(
+            "FORAGER_ACCOUNT_ID is required. Copy it from the Forager app's My Account page."
+        )
 
     async def search_organization(self, domain: str) -> Optional[Dict[str, Any]]:
         """Search an organization by domain via /api/{account_id}/datastorage/organization_search/."""

@@ -342,8 +342,8 @@ class HubSpotClient:
         Supports both v3 (SHA-256 HMAC with timestamp) and v1/v2 fallback.
         """
         if not self.client_secret:
-            logger.warning("HUBSPOT_CLIENT_SECRET not configured. Skipping signature verification.")
-            return True
+            logger.error("HUBSPOT_CLIENT_SECRET is not configured; rejecting webhook.")
+            return False
 
         # Check v3 signature (Current official standard)
         if signature_v3 and timestamp:

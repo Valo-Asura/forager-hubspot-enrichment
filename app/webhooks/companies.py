@@ -110,7 +110,7 @@ async def handle_company_webhook(
             continue
 
         company_id = str(event.objectId)
-        event_key = f"{event.subscriptionType}_{company_id}_{event.occurredAt}_{event.attemptNumber}"
+        event_key = webhook_event_key(event)
 
         # Duplicate delivery check
         if is_duplicate_event(event_key):
@@ -133,3 +133,12 @@ async def handle_company_webhook(
         "events_dispatched": accepted_count,
         "events_skipped": skipped_count,
     }
+
+
+def webhook_event_key(event: HubSpotWebhookEvent) -> str:
+    """Build a stable delivery key that stays the same across HubSpot retries."""
+    if event.eventId is not None:
+        return f"{event.portalId}_{event.subscriptionId}_{event.eventId}"
+    # Legacy or test payloads may omit eventId; attemptNumber is deliberately
+    # excluded because HubSpot increments it when retrying the same event.
+    return f"{event.subscriptionType}_{event.objectId}_{event.occurredAt}"

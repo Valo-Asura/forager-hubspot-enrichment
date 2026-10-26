@@ -95,3 +95,11 @@ def test_verify_webhook_signature_v1_valid():
         request_body=body,
     )
     assert is_valid is True
+
+
+def test_verify_webhook_signature_rejects_when_client_secret_missing():
+    client = HubSpotClient(access_token="test-token", client_secret="")
+    assert client.verify_webhook_signature(
+        signature_v1="anything",
+        request_body=b"[]",
+    ) is False

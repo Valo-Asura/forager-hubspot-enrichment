@@ -17,17 +17,11 @@ async def test_forager_get_account_id_cached():
 
 
 @pytest.mark.asyncio
-@respx.mock
-async def test_forager_resolve_account_id_api():
-    """Test resolving account ID from /api/users/current/."""
-    respx.get("https://api-v2.forager.ai/api/users/current/").respond(
-        status_code=200,
-        json={"id": 1, "username": "tester", "accounts": [{"id": 789, "name": "Default Account"}]},
-    )
-
+async def test_forager_account_id_required():
+    """Do not call an undocumented endpoint to infer the Forager account ID."""
     client = ForagerClient(api_key="test_key")
-    account_id = await client.get_account_id()
-    assert account_id == 789
+    with pytest.raises(ForagerAPIError, match="FORAGER_ACCOUNT_ID is required"):
+        await client.get_account_id()
     await client.close()
 
 
