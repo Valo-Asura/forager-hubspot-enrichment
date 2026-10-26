@@ -248,11 +248,11 @@ tests/unit/test_signatures.py (5 signature verification tests) PASSED
 * Local automated suite: **48 passed** (mocked unit and integration tests).
 * Live local service: `/health`, `/docs`, and `/openapi.json` returned HTTP 200.
 * HubSpot schema preflight: all 10 required company properties and 11 required contact properties exist.
-* OpenAI demo company: existing record verified (HubSpot ID `356231950027`, `name=OpenAI`, `domain=openai.com`); Forager enrichment updated 9 company properties.
-* Live contact discovery: 2 contacts synchronized in this run; the company now has **5 associated contacts** total. Validation found **0 duplicates** and passed.
+* OpenAI demo company: HubSpot record `356231950027` is named `OpenAI` and uses `openai.com`. A provider lookup returned a conflicting company name during the latest live run, so the demo label was restored and the provider's company details should be reviewed before presenting them as verified enrichment.
+* Live contact discovery: the company has **5 associated contacts**. The latest field audit found **27 of 45** requested contact fields populated, **0 of 5** contacts complete across all nine fields, and **0 duplicate email/LinkedIn matches**. This is a partial enrichment result, not a passing completeness result.
 * Environment: Forager API key/account ID and HubSpot Service Key are configured in the ignored `.env`. `HUBSPOT_CLIENT_SECRET` is blank; CRM enrichment works, but HubSpot-signed webhook requests cannot be validated until the app client secret is configured.
 * Webhook endpoints: both company and contact endpoints rejected unsigned local requests with HTTP 401. Mocked signature and retry/deduplication tests pass; signed live delivery still needs the HubSpot app client secret.
-* Vercel preview: deployed and protected by Vercel authentication. `/health` returned HTTP 200, and an unauthenticated manual enrichment request returned HTTP 401 without calling HubSpot.
+* Vercel production: `https://forager-hubspot-enrichment.vercel.app` serves the FastAPI app. `/health` returned HTTP 200, and an unauthenticated manual enrichment request returned HTTP 401 without calling HubSpot. Vercel access protection is enabled. The production URL was repaired by promoting the ready FastAPI deployment and confirming the app's production health endpoint.
 
 ---
 
@@ -306,10 +306,10 @@ python scripts/enrich_demo_company.py
 ```
 This automated script:
 1. Locates or creates the OpenAI test company in HubSpot.
-2. Enriches all company attributes from Forager (`openai.com`).
-3. Discovers 5 tech leaders/engineers matching the job-title filter.
-4. Enriches each person with verified details (email, phone, LinkedIn, city, state, country).
-5. Associates all 5 contacts with the OpenAI company in HubSpot.
+2. Requests company attributes from Forager (`openai.com`). Review source accuracy before presenting provider values as verified company facts.
+3. Discovers up to 5 tech leaders/engineers matching the job-title filter.
+4. Enriches each person with available source details (email, phone, LinkedIn, city, state, country); missing fields remain blank rather than fabricated.
+5. Associates discovered contacts with the OpenAI company in HubSpot.
 
 ### 3. Run Validation Audit
 ```bash
@@ -325,31 +325,17 @@ Outputs validation check results:
 
 ## Vercel Deployment
 
-Vercel loads the FastAPI app from `app.main:app`; this project does not need a Dockerfile or Procfile.
+Vercel serves the FastAPI app from `app.main:app`; this project does not need a Dockerfile or Procfile. The production alias is `https://forager-hubspot-enrichment.vercel.app`, and Vercel access protection is enabled. The production `/health` endpoint returns HTTP 200.
 
-1. Install and sign in to the Vercel CLI, then create a preview deployment:
-   ```bash
-   npm install --global vercel
-   vercel login
-   vercel
-   ```
-2. Add the configured credentials and runtime settings to the Vercel Preview environment before deploying:
-   * `FORAGER_API_KEY`
-   * `FORAGER_ACCOUNT_ID`
-   * `HUBSPOT_ACCESS_TOKEN`
-   * `MANUAL_API_KEY`
-   * `ALLOWED_JOB_TITLES`
-   * `MAX_CONTACTS_PER_COMPANY`
-   * `APP_ENV=production`
-   * `LOG_LEVEL=INFO`
-   Add `HUBSPOT_CLIENT_SECRET` when you are ready to test signed HubSpot webhook delivery. Without it, webhook requests fail closed with HTTP 401.
-3. The current preview is `https://forager-hubspot-enrichment-mdyo2lohl.vercel.app` and requires Vercel account access. Check its `/health` route. Keep deployments in preview until the webhook secret is configured and verified. Deploy to production after that:
-   ```bash
-   vercel --prod
-   ```
-4. Configure the HubSpot app webhook URL as `https://<YOUR-VERCEL-DOMAIN>/webhooks/hubspot` and subscribe to `company.creation` and `contact.creation`.
+To deploy a future change, use the linked project and promote a successful FastAPI deployment:
+```bash
+vercel
+vercel --prod
+```
 
-Manual enrichment routes require `Authorization: Bearer <MANUAL_API_KEY>` in production. The webhook routes validate HubSpot signatures with `HUBSPOT_CLIENT_SECRET`.
+Set the Forager key/account ID, HubSpot Service Key, `MANUAL_API_KEY`, `ALLOWED_JOB_TITLES`, `MAX_CONTACTS_PER_COMPANY`, `APP_ENV=production`, and `LOG_LEVEL=INFO` in the deployment environment. Keep the key values private. `HUBSPOT_CLIENT_SECRET` is not configured yet: add it to Vercel Production before testing signed HubSpot webhook delivery. Webhook requests fail closed with HTTP 401 until then.
+
+When signed delivery is ready, configure the HubSpot app URL as `https://forager-hubspot-enrichment.vercel.app/webhooks/hubspot` and subscribe to `company.creation` and `contact.creation`. Manual enrichment routes require `Authorization: Bearer <MANUAL_API_KEY>` in production.
 
 ---
 
@@ -383,15 +369,6 @@ Forager returns rich signals that are not part of standard HubSpot CRM propertie
 
 ---
 
-## Video Walkthrough Script
+## Video Walkthrough
 
-Use this concise script for the Loom/screen recording:
-
-| Timestamp | Screen | Speaking Script |
-|---|---|---|
-| **0:00 - 0:30** | Code repository & Architecture | *"Hi team, here is the custom Python integration connecting Forager and HubSpot. Built cleanly with FastAPI, httpx, and Pydantic with zero no-code dependencies."* |
-| **0:30 - 1:00** | Test Suite Execution | *"Let's run `pytest -v`. All 48 mocked unit and integration tests pass, covering field mapping, title variation matching, v3 signature validation, and retry deduplication."* |
-| **1:00 - 1:45** | OpenAI Company & Contact Enrichment | *"The live run updated nine available company properties and synchronized two matching contacts. The contact limit is five, and this run found two new matches."* |
-| **1:45 - 2:30** | HubSpot CRM Verification | *"The OpenAI record now has five associated contacts. The audit found no duplicates. Fields that Forager does not provide remain empty rather than being guessed."* |
-| **2:30 - 3:15** | Webhook Validation | *"The automated tests cover valid signatures, signature rejection, and retry deduplication. The deployed endpoint rejects unsigned requests with HTTP 401. Live signed delivery still needs the HubSpot app client secret."* |
-| **3:15 - 3:45** | Wrap-up | *"The local integration and live CRM enrichment are validated. The protected Vercel preview is running. Live signed webhooks need the HubSpot app secret."* |
+The short, silent evaluation walkthrough is saved at [`deliverables/forager-hubspot-walkthrough.mp4`](deliverables/forager-hubspot-walkthrough.mp4). It uses aggregate CRM counts and does not show browser controls, AI tools, credentials, or personal contact details. It also discloses partial contact completeness, the provider's mismatched company-name result, and the pending HubSpot app client secret for signed live webhook delivery.
