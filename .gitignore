@@ -29,6 +29,7 @@ ENV/
 # Environment Variables & Secrets
 .env
 .env.local
+.vercel/
 *.pem
 *.key
 

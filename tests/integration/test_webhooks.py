@@ -32,6 +32,32 @@ async def test_root_endpoint():
 
 
 @pytest.mark.asyncio
+async def test_manual_enrichment_requires_bearer_key_in_production(monkeypatch):
+    settings = app.state.settings
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    monkeypatch.setattr(settings, "MANUAL_API_KEY", "test-manual-key")
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/api/v1/enrich/company", json={"domain": "openai.com"})
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_manual_enrichment_fails_closed_if_key_is_missing_in_production(monkeypatch):
+    settings = app.state.settings
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    monkeypatch.setattr(settings, "MANUAL_API_KEY", "")
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/api/v1/enrich/company", json={"domain": "openai.com"})
+
+    assert response.status_code == 503
+
+
+@pytest.mark.asyncio
 async def test_company_webhook_success_and_deduplication():
     """Test company.creation webhook acceptance and duplicate rejection."""
     transport = httpx.ASGITransport(app=app)

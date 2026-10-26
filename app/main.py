@@ -1,10 +1,13 @@
 """Main FastAPI application entry point for Forager x HubSpot integration."""
 
+import hmac
 import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Dict, List
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, status
+
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.clients.forager import ForagerClient
 from app.clients.hubspot import HubSpotClient
@@ -26,6 +29,28 @@ from app.webhooks.companies import handle_company_webhook
 from app.webhooks.contacts import handle_contact_webhook
 
 logger = logging.getLogger("forager_hubspot.main")
+manual_api_bearer = HTTPBearer(auto_error=False)
+
+
+def require_manual_api_key(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(manual_api_bearer),
+) -> None:
+    """Protect on-demand CRM writes when the app is deployed publicly."""
+    settings = request.app.state.settings
+    expected_key = settings.MANUAL_API_KEY
+
+    if not expected_key:
+        if settings.is_production:
+            raise HTTPException(status_code=503, detail="Manual API authentication is not configured")
+        return
+
+    if credentials is None or not hmac.compare_digest(credentials.credentials, expected_key):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 @asynccontextmanager
@@ -156,9 +181,7 @@ async def health_check() -> HealthResponse:
     )
 
 
-# =============================================================================
-# HubSpot Webhook Routes
-# =============================================================================
+# HubSpot webhook routes
 
 
 @app.post("/webhooks/hubspot/companies", status_code=status.HTTP_200_OK, tags=["Webhooks"])
@@ -231,12 +254,15 @@ async def webhook_unified(
     return results
 
 
-# =============================================================================
-# Manual / On-Demand API Routes
-# =============================================================================
+# Manual API routes
 
 
-@app.post("/api/v1/enrich/company", response_model=CompanyEnrichmentReport, tags=["Enrichment"])
+@app.post(
+    "/api/v1/enrich/company",
+    response_model=CompanyEnrichmentReport,
+    tags=["Enrichment"],
+    dependencies=[Depends(require_manual_api_key)],
+)
 async def manual_enrich_company(
     req: EnrichCompanyRequest,
     request: Request,
@@ -250,7 +276,12 @@ async def manual_enrich_company(
     )
 
 
-@app.post("/api/v1/enrich/contact", response_model=ContactEnrichmentReport, tags=["Enrichment"])
+@app.post(
+    "/api/v1/enrich/contact",
+    response_model=ContactEnrichmentReport,
+    tags=["Enrichment"],
+    dependencies=[Depends(require_manual_api_key)],
+)
 async def manual_enrich_contact(
     req: EnrichContactRequest,
     request: Request,
@@ -264,7 +295,11 @@ async def manual_enrich_contact(
     )
 
 
-@app.post("/api/v1/discover/contacts", tags=["Discovery"])
+@app.post(
+    "/api/v1/discover/contacts",
+    tags=["Discovery"],
+    dependencies=[Depends(require_manual_api_key)],
+)
 async def manual_discover_contacts(
     req: DiscoverContactsRequest,
     request: Request,

@@ -36,6 +36,10 @@ class Settings(BaseSettings):
         default="",
         description="HubSpot Client Secret for Webhook Signature Verification",
     )
+    MANUAL_API_KEY: str = Field(
+        default="",
+        description="Bearer token required by the manual enrichment endpoints in production",
+    )
     HUBSPOT_BASE_URL: str = Field(
         default="https://api.hubapi.com",
         description="HubSpot API base URL",

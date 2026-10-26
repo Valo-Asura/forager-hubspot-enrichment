@@ -20,7 +20,7 @@ Built in Python using FastAPI, Uvicorn, httpx, and Pydantic. **Zero no-code tool
    - [Contact Discovery & Title Filtering](#contact-discovery--title-filtering)
    - [Webhook Automation & Signature Verification](#webhook-automation--signature-verification)
 9. [OpenAI Demo Records & Execution](#openai-demo-records--execution)
-10. [Railway Production Deployment](#railway-production-deployment)
+10. [Vercel Deployment](#vercel-deployment)
 11. [Known Provider Limitations](#known-provider-limitations)
 12. [Forager Extra Fields for Team Discussion](#forager-extra-fields-for-team-discussion)
 13. [Video Walkthrough Script](#video-walkthrough-script)
@@ -38,7 +38,7 @@ Built in Python using FastAPI, Uvicorn, httpx, and Pydantic. **Zero no-code tool
                       |                                    |
                       v (HTTPS POST with SHA-256 HMAC)     v
 +---------------------+------------------------------------+------------------------+
-|                      FastAPI Automation Service (Railway / Local)                 |
+|                         FastAPI Service (Vercel / Local)                           |
 |                                                                                   |
 |  1. Verify Signature (X-HubSpot-Signature-v3 with Timestamp & Replay Guard)       |
 |  2. Idempotency Check (Filter duplicate eventId deliveries)                      |
@@ -164,8 +164,6 @@ forager-hubspot-enrichment/
 │       └── test_webhooks.py            # HTTP webhook endpoints & loop protection
 ├── .env.example
 ├── .gitignore
-├── Dockerfile
-├── Procfile                      # Railway deployment start command
 ├── pyproject.toml
 ├── requirements.txt
 └── README.md
@@ -206,10 +204,11 @@ Interactive OpenAPI documentation will be accessible at: `http://localhost:8000/
 | `FORAGER_ACCOUNT_ID`| Yes | — | Numeric account ID shown on the Forager app's My Account page |
 | `HUBSPOT_ACCESS_TOKEN` | Yes | `""` | HubSpot Service Key with company/contact read and write scopes |
 | `HUBSPOT_CLIENT_SECRET` | For Webhooks | `""` | App client secret for SHA-256 HMAC signature validation |
+| `MANUAL_API_KEY` | Production | `""` | Bearer token for manual CRM write endpoints |
 | `HUBSPOT_BASE_URL` | No | `https://api.hubapi.com` | Base URL for HubSpot CRM |
 | `ALLOWED_JOB_TITLES` | No | `Software Engineer,VP of Engineering,CTO,Product Manager` | Comma-separated title filters |
 | `MAX_CONTACTS_PER_COMPANY` | No | `5` | Maximum contacts to discover per company |
-| `PORT` | No | `8000` | Port assigned by Railway or local dev |
+| `PORT` | No | `8000` | Port used by the local server |
 | `LOG_LEVEL` | No | `INFO` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`) |
 
 ---
@@ -241,18 +240,19 @@ tests/unit/test_discovery.py (23 parameterized title tests) PASSED
 tests/unit/test_mapping.py (6 mapping & location tests) PASSED
 tests/unit/test_signatures.py (5 signature verification tests) PASSED
 
-============================== 46 passed ==============================
+============================== 48 passed ==============================
 ```
 
 ### Current Validation Snapshot (2026-10-26)
 
-* Local automated suite: **46 passed** (mocked unit and integration tests).
+* Local automated suite: **48 passed** (mocked unit and integration tests).
 * Live local service: `/health`, `/docs`, and `/openapi.json` returned HTTP 200.
 * HubSpot schema preflight: all 10 required company properties and 11 required contact properties exist.
 * OpenAI demo company: existing record verified (HubSpot ID `356231950027`, `name=OpenAI`, `domain=openai.com`); Forager enrichment updated 9 company properties.
 * Live contact discovery: 2 contacts synchronized in this run; the company now has **5 associated contacts** total. Validation found **0 duplicates** and passed.
 * Environment: Forager API key/account ID and HubSpot Service Key are configured in the ignored `.env`. `HUBSPOT_CLIENT_SECRET` is blank; CRM enrichment works, but HubSpot-signed webhook requests cannot be validated until the app client secret is configured.
-* Webhook endpoints: both company and contact endpoints rejected unsigned local requests with HTTP 401. Mocked signature and retry/deduplication tests pass; signed live webhook delivery and Railway deployment remain unverified. Railway CLI is not installed in this environment.
+* Webhook endpoints: both company and contact endpoints rejected unsigned local requests with HTTP 401. Mocked signature and retry/deduplication tests pass; signed live delivery still needs the HubSpot app client secret.
+* Vercel preview: deployed and protected by Vercel authentication. `/health` returned HTTP 200, and an unauthenticated manual enrichment request returned HTTP 401 without calling HubSpot.
 
 ---
 
@@ -323,46 +323,40 @@ Outputs validation check results:
 
 ---
 
-## Railway Production Deployment
+## Vercel Deployment
 
-### 1. Deploy via Railway CLI or Git
-The repository includes `Procfile` and `Dockerfile`:
-```bash
-# Using Railway CLI:
-railway login
-railway init
-railway up
-```
+Vercel loads the FastAPI app from `app.main:app`; this project does not need a Dockerfile or Procfile.
 
-### 2. Configure Environment Variables in Railway Dashboard
-In Railway -> Project Settings -> Variables, add:
-* `FORAGER_API_KEY`
-* `FORAGER_ACCOUNT_ID`
-* `HUBSPOT_ACCESS_TOKEN`
-* `HUBSPOT_CLIENT_SECRET`
-* `ALLOWED_JOB_TITLES`
-* `MAX_CONTACTS_PER_COMPANY`=5
-* `LOG_LEVEL`=INFO
-
-### 3. Configure HubSpot Webhooks
-1. In HubSpot Developer Portal / App Settings, navigate to **Webhooks**.
-2. Set the webhook targets to these routes:
-   * `https://<YOUR-RAILWAY-APP>.up.railway.app/webhooks/hubspot/companies`
-   * `https://<YOUR-RAILWAY-APP>.up.railway.app/webhooks/hubspot/contacts`
-3. Create Webhook Subscriptions for the matching routes:
-   * **Company created** (`company.creation`)
-   * **Contact created** (`contact.creation`)
-4. Verify `/health` on production URL:
+1. Install and sign in to the Vercel CLI, then create a preview deployment:
    ```bash
-   curl -i https://<YOUR-RAILWAY-APP>.up.railway.app/health
+   npm install --global vercel
+   vercel login
+   vercel
    ```
+2. Add the configured credentials and runtime settings to the Vercel Preview environment before deploying:
+   * `FORAGER_API_KEY`
+   * `FORAGER_ACCOUNT_ID`
+   * `HUBSPOT_ACCESS_TOKEN`
+   * `MANUAL_API_KEY`
+   * `ALLOWED_JOB_TITLES`
+   * `MAX_CONTACTS_PER_COMPANY`
+   * `APP_ENV=production`
+   * `LOG_LEVEL=INFO`
+   Add `HUBSPOT_CLIENT_SECRET` when you are ready to test signed HubSpot webhook delivery. Without it, webhook requests fail closed with HTTP 401.
+3. The current preview is `https://forager-hubspot-enrichment-mdyo2lohl.vercel.app` and requires Vercel account access. Check its `/health` route. Keep deployments in preview until the webhook secret is configured and verified. Deploy to production after that:
+   ```bash
+   vercel --prod
+   ```
+4. Configure the HubSpot app webhook URL as `https://<YOUR-VERCEL-DOMAIN>/webhooks/hubspot` and subscribe to `company.creation` and `contact.creation`.
+
+Manual enrichment routes require `Authorization: Bearer <MANUAL_API_KEY>` in production. The webhook routes validate HubSpot signatures with `HUBSPOT_CLIENT_SECRET`.
 
 ---
 
 ## Known Provider Limitations
 
 1. **Webhook worker and idempotency state are process-local:**
-   * FastAPI `BackgroundTasks` and the deduplication/cooldown caches are in memory. A restart or multiple Railway replicas can lose or split that state. Use a durable queue and shared store before relying on this for production delivery guarantees.
+   * FastAPI `BackgroundTasks` and the deduplication/cooldown caches are in memory. A new function instance does not share that state. Use a durable queue and shared store before relying on this for production delivery guarantees.
 2. **Personal Direct Dials & Cell Phones:**
    * B2B providers do not always have verified mobile phone numbers for every individual due to privacy regulations (GDPR/CCPA). Where Forager returns no phone number, the field remains empty and is logged in `missing_fields`.
 3. **Work Email Async Enrichment:**
@@ -396,8 +390,8 @@ Use this concise script for the Loom/screen recording:
 | Timestamp | Screen | Speaking Script |
 |---|---|---|
 | **0:00 - 0:30** | Code repository & Architecture | *"Hi team, here is the custom Python integration connecting Forager and HubSpot. Built cleanly with FastAPI, httpx, and Pydantic with zero no-code dependencies."* |
-| **0:30 - 1:00** | Test Suite Execution | *"Let's run `pytest -v`. All 46 mocked unit and integration tests pass, covering field mapping, title variation matching, v3 signature validation, and retry deduplication."* |
+| **0:30 - 1:00** | Test Suite Execution | *"Let's run `pytest -v`. All 48 mocked unit and integration tests pass, covering field mapping, title variation matching, v3 signature validation, and retry deduplication."* |
 | **1:00 - 1:45** | OpenAI Company & Contact Enrichment | *"The live run updated nine available company properties and synchronized two matching contacts. The contact limit is five, and this run found two new matches."* |
 | **1:45 - 2:30** | HubSpot CRM Verification | *"The OpenAI record now has five associated contacts. The audit found no duplicates. Fields that Forager does not provide remain empty rather than being guessed."* |
-| **2:30 - 3:15** | Webhook Validation | *"The automated tests cover valid signatures, signature rejection, and retry deduplication. The live endpoint rejects unsigned requests with HTTP 401. Live signed delivery still needs the HubSpot app client secret and a deployed service."* |
-| **3:15 - 3:45** | Wrap-up | *"The local integration and live CRM enrichment are validated. Deployment and signed live webhook delivery are the remaining submission steps."* |
+| **2:30 - 3:15** | Webhook Validation | *"The automated tests cover valid signatures, signature rejection, and retry deduplication. The deployed endpoint rejects unsigned requests with HTTP 401. Live signed delivery still needs the HubSpot app client secret."* |
+| **3:15 - 3:45** | Wrap-up | *"The local integration and live CRM enrichment are validated. The protected Vercel preview is running. Live signed webhooks need the HubSpot app secret."* |
