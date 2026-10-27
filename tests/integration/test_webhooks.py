@@ -21,16 +21,6 @@ async def test_health_endpoint():
 
 
 @pytest.mark.asyncio
-async def test_root_endpoint():
-    """Test GET / returns service information."""
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "documentation" in data
-
-
 @pytest.mark.asyncio
 async def test_manual_enrichment_requires_bearer_key_in_production(monkeypatch):
     settings = app.state.settings
@@ -75,7 +65,7 @@ async def test_company_webhook_success_and_deduplication():
         ]
         body_bytes = json.dumps(payload).encode("utf-8")
         timestamp = str(int(time.time() * 1000))
-        url = "http://test/webhooks/hubspot/companies"
+        url = "http://test/webhooks/hubspot"
 
         secret = app.state.settings.HUBSPOT_CLIENT_SECRET or "test_secret"
         app.state.hubspot_client.client_secret = secret
@@ -95,12 +85,12 @@ async def test_company_webhook_success_and_deduplication():
         }
 
         # 1. First delivery -> accepted
-        resp1 = await client.post("/webhooks/hubspot/companies", content=body_bytes, headers=headers)
+        resp1 = await client.post("/webhooks/hubspot", content=body_bytes, headers=headers)
         assert resp1.status_code == 200
         assert resp1.json()["events_dispatched"] == 1
 
         # 2. Duplicate delivery -> skipped
-        resp2 = await client.post("/webhooks/hubspot/companies", content=body_bytes, headers=headers)
+        resp2 = await client.post("/webhooks/hubspot", content=body_bytes, headers=headers)
         assert resp2.status_code == 200
         assert resp2.json()["events_skipped"] == 1
         assert resp2.json()["events_dispatched"] == 0
@@ -123,7 +113,7 @@ async def test_company_webhook_retry_attempt_is_deduplicated():
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         secret = "retry-test-secret"
         app.state.hubspot_client.client_secret = secret
-        url = "http://test/webhooks/hubspot/companies"
+        url = "http://test/webhooks/hubspot"
         timestamp0 = str(int(time.time() * 1000))
         headers0 = {
             "Content-Type": "application/json",
@@ -136,7 +126,7 @@ async def test_company_webhook_retry_attempt_is_deduplicated():
             ),
             "X-HubSpot-Request-Timestamp": timestamp0,
         }
-        response0 = await client.post("/webhooks/hubspot/companies", content=body0, headers=headers0)
+        response0 = await client.post("/webhooks/hubspot", content=body0, headers=headers0)
         assert response0.status_code == 200, response0.text
         assert response0.json()["events_dispatched"] == 1, response0.text
 
@@ -154,7 +144,7 @@ async def test_company_webhook_retry_attempt_is_deduplicated():
             ),
             "X-HubSpot-Request-Timestamp": timestamp1,
         }
-        response1 = await client.post("/webhooks/hubspot/companies", content=body1, headers=headers1)
+        response1 = await client.post("/webhooks/hubspot", content=body1, headers=headers1)
         assert response1.json()["events_dispatched"] == 0
         assert response1.json()["events_skipped"] == 1
 
@@ -179,5 +169,5 @@ async def test_contact_webhook_signature_failure():
         }
         app.state.hubspot_client.client_secret = "real_secret"
 
-        resp = await client.post("/webhooks/hubspot/contacts", content=body_bytes, headers=headers)
+        resp = await client.post("/webhooks/hubspot", content=body_bytes, headers=headers)
         assert resp.status_code == 401

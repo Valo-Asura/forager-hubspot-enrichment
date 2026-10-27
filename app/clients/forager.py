@@ -173,7 +173,7 @@ class ForagerClient:
         # incomplete expression, so send configured role labels as phrases.
         role_query = role_title.strip()
         if role_query and not (role_query.startswith('"') and role_query.endswith('"')):
-            role_query = f'"{role_query.replace(chr(34), chr(92) + chr(34))}"'
+            role_query = '"' + role_query.replace('"', '\\"') + '"'
 
         payload = {
             "organization_domains": [clean_domain],

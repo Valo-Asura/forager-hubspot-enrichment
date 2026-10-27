@@ -99,7 +99,7 @@ async def test_enrich_company_full_flow(sample_forager_org, sample_hubspot_compa
         discovery_service=discovery_service,
     )
 
-    report = await service.enrich_company(company_id="comp_101", discover_contacts=True)
+    report = await service.enrich_company(company_id="comp_101")
 
     assert report.status == "success"
     assert report.company_id == "comp_101"

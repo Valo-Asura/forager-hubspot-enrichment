@@ -1,374 +1,68 @@
-# Forager × HubSpot AI Automation Integration
+# Forager → HubSpot
 
-Production-grade, deployable Python integration connecting **Forager.ai** data enrichment with **HubSpot CRM**. The service enriches companies and contacts, discovers target candidates using configurable job-title filtering, and processes real-time HubSpot webhooks asynchronously with signature validation and deduplication.
+A small FastAPI service that enriches a HubSpot company with Forager data, discovers up to five current contacts by job title, and processes signed HubSpot company/contact creation webhooks.
 
-Built in Python using FastAPI, Uvicorn, httpx, and Pydantic. **Zero no-code tools (no n8n, Make, or Zapier).**
+## API
 
----
+| Method | Path | Purpose | Authentication |
+| --- | --- | --- | --- |
+| `GET` | `/health` | Health check | None |
+| `POST` | `/api/v1/enrich/company` | Enrich a company and discover contacts | `MANUAL_API_KEY` bearer token |
+| `POST` | `/webhooks/hubspot` | Handle `company.creation` and `contact.creation` | HubSpot signature v3/v1 |
 
-## Table of Contents
-1. [Architecture & Data Flow](#architecture--data-flow)
-2. [Verified API Contracts](#verified-api-contracts)
-3. [Prerequisites & Permissions](#prerequisites--permissions)
-4. [Project Structure](#project-structure)
-5. [Local Setup & Execution](#local-setup--execution)
-6. [Environment Configuration](#environment-configuration)
-7. [Running Tests](#running-tests)
-8. [Features & Capabilities](#features--capabilities)
-   - [Company Enrichment](#company-enrichment)
-   - [Contact Enrichment & Completeness](#contact-enrichment--completeness)
-   - [Contact Discovery & Title Filtering](#contact-discovery--title-filtering)
-   - [Webhook Automation & Signature Verification](#webhook-automation--signature-verification)
-9. [OpenAI Demo Records & Execution](#openai-demo-records--execution)
-10. [Vercel Deployment](#vercel-deployment)
-11. [Known Provider Limitations](#known-provider-limitations)
-12. [Forager Extra Fields for Team Discussion](#forager-extra-fields-for-team-discussion)
-13. [Video Walkthrough Script](#video-walkthrough-script)
+Interactive request schemas are at `/docs`.
 
----
+## Run locally
 
-## Architecture & Data Flow
-
-```
-+-----------------------------------------------------------------------------------+
-|                                  HubSpot CRM                                      |
-|                                                                                   |
-|  Company Created Webhook                      Contact Created Webhook             |
-+---------------------+------------------------------------+------------------------+
-                      |                                    |
-                      v (HTTPS POST with SHA-256 HMAC)     v
-+---------------------+------------------------------------+------------------------+
-|                         FastAPI Service (Vercel / Local)                           |
-|                                                                                   |
-|  1. Verify Signature (X-HubSpot-Signature-v3 with Timestamp & Replay Guard)       |
-|  2. Idempotency Check (Filter duplicate eventId deliveries)                      |
-|  3. Cooldown Guard (Prevent recursive CRM update loops)                           |
-|  4. Background Task Dispatch (Fast HTTP 200/202 acknowledgment)                   |
-+---------------------+------------------------------------+------------------------+
-                      |                                    |
-                      v                                    v
-+---------------------+------------------------------------+------------------------+
-|                                 Services Layer                                    |
-|                                                                                   |
-|  - CompanyEnrichmentService: Resolves company, fetches Forager firmographics     |
-|  - ContactDiscoveryService: Queries roles, normalizes & fuzzy-matches job titles  |
-|  - ContactEnrichmentService: Reverse lookups, verified emails & phone numbers     |
-|  - Mapping & Normalization: Extracts city/state/country, maps CRM properties      |
-+---------------------+------------------------------------+------------------------+
-                      |                                    |
-                      v                                    v
-+---------------------+------------------------------------+------------------------+
-|              Forager API v2                               HubSpot API v3/v4       |
-|  - POST .../organization_search/             - PATCH /crm/v3/objects/companies/{id}|
-|  - POST .../person_role_search/               - POST /crm/v3/objects/contacts      |
-|  - POST .../person_detail_lookup/            - PATCH /crm/v3/objects/contacts/{id}|
-|  - POST .../person_contacts_lookup/phones/   - PUT /crm/v4/.../associations/      |
-|  - POST .../person_contacts_lookup/emails/                                        |
-+-----------------------------------------------------------------------------------+
-```
-
----
-
-## Verified API Contracts
-
-### 1. Forager.ai API (v2)
-* **Base URL:** `https://api-v2.forager.ai`
-* **Authentication Header:** `X-API-KEY: <FORAGER_API_KEY>`
-* **Account ID:** Set `FORAGER_ACCOUNT_ID` to the numeric ID shown on the Forager app's My Account page. The documented data endpoints require this path parameter.
-* **Organization Search:**
-  * `POST /api/{account_id}/datastorage/organization_search/`
-  * Body: `{"domains": ["openai.com"], "page": 0}`
-  * Response: `{ "search_results": [ { "name", "domain", "website", "description", "employees_amount", "finance_info": {"revenue"}, "linkedin_info": {"public_profile_url"}, "location": {"osm_locations": [...]}, "founded_date": ... } ] }`
-* **Person Role Search (Discovery):**
-  * `POST /api/{account_id}/datastorage/person_role_search/`
-  * Body: `{"organization_domains": ["openai.com"], "role_title": "Software Engineer", "role_is_current": true, "page": 0}`
-  * Response: `{ "search_results": [ { "role_title", "is_current", "person": { "id", "first_name", "last_name", "headline", "linkedin_info": {"public_identifier", "public_profile_url"}, "location": ... } } ] }`
-* **Person Contacts Lookup:**
-  * Phone numbers: `POST /api/{account_id}/datastorage/person_contacts_lookup/phone_numbers/` with `{"person_id": int}` or `{"linkedin_public_identifier": str}`
-  * Personal emails: `POST /api/{account_id}/datastorage/person_contacts_lookup/personal_emails/` with `{"person_id": int}`
-  * Work emails: `POST /api/v2/{account_id}/datastorage/person_contacts_lookup/work_emails/`
-
-### 2. HubSpot CRM API (v3/v4)
-* **Base URL:** `https://api.hubapi.com`
-* **Authentication Header:** `Authorization: Bearer <HUBSPOT_ACCESS_TOKEN>`
-* **Company Endpoints:**
-  * Search: `POST /crm/v3/objects/companies/search`
-  * Read: `GET /crm/v3/objects/companies/{companyId}?properties=...`
-  * Create: `POST /crm/v3/objects/companies`
-  * Update: `PATCH /crm/v3/objects/companies/{companyId}`
-* **Contact Endpoints:**
-  * Search: `POST /crm/v3/objects/contacts/search`
-  * Read: `GET /crm/v3/objects/contacts/{contactId}?properties=...`
-  * Create: `POST /crm/v3/objects/contacts`
-  * Update: `PATCH /crm/v3/objects/contacts/{contactId}`
-* **Associations Endpoint:**
-  * `PUT /crm/v4/objects/contacts/{contactId}/associations/companies/{companyId}` with category `HUBSPOT_DEFINED` and type ID `1` (Primary Contact to Company).
-
----
-
-## Prerequisites & Permissions
-
-### HubSpot Private App Scopes
-Create a Private App in your HubSpot portal (**Settings -> Integrations -> Private Apps**):
-* `crm.objects.companies.read`
-* `crm.objects.companies.write`
-* `crm.objects.contacts.read`
-* `crm.objects.contacts.write`
-* `crm.schemas.custom.read`
-
-### Forager Account
-* Sign up at [app.forager.ai](https://app.forager.ai) (150 free credits provided upon signup).
-* Navigate to **Settings -> API Keys** and generate an API key.
-
----
-
-## Project Structure
-
-```
-forager-hubspot-enrichment/
-├── app/
-│   ├── clients/
-│   │   ├── __init__.py
-│   │   ├── forager.py            # Async client for Forager REST API v2
-│   │   └── hubspot.py            # Async client for HubSpot CRM v3/v4 & v3 signature checks
-│   ├── services/
-│   │   ├── __init__.py
-│   │   ├── companies.py          # Company enrichment orchestration
-│   │   ├── contacts.py           # Contact enrichment & completeness calculation
-│   │   ├── discovery.py          # Role searching & fuzzy job-title matching
-│   │   └── mapping.py            # Provider field normalization & OSM location parsing
-│   ├── webhooks/
-│   │   ├── __init__.py
-│   │   ├── companies.py          # HubSpot company.creation webhook handler
-│   │   └── contacts.py           # HubSpot contact.creation webhook handler
-│   ├── config.py                 # Pydantic BaseSettings & env resolution
-│   ├── exceptions.py             # Custom domain exceptions
-│   ├── logging_config.py         # Structured logging with secret redaction
-│   ├── main.py                   # FastAPI application & lifespan management
-│   └── schemas.py                # Pydantic models & reports
-├── scripts/
-│   ├── __init__.py
-│   ├── setup_hubspot.py          # Schema pre-flight inspection
-│   ├── enrich_demo_company.py    # Primary deliverable execution script
-│   └── validate_demo_records.py  # Production audit & completeness validation
-├── tests/
-│   ├── conftest.py               # Mock fixtures & signature generator
-│   ├── unit/
-│   │   ├── test_clients.py       # Client retry logic & error handling
-│   │   ├── test_discovery.py     # Job-title variations & deduplication tests
-│   │   ├── test_mapping.py       # Mapping, OSM locations, & completeness tests
-│   │   └── test_signatures.py    # HubSpot v3/v1 signature verification tests
-│   └── integration/
-│       ├── test_company_enrichment.py  # End-to-end company flow (respx mocked)
-│       ├── test_contact_enrichment.py  # End-to-end contact flow (respx mocked)
-│       └── test_webhooks.py            # HTTP webhook endpoints & loop protection
-├── .env.example
-├── .gitignore
-├── pyproject.toml
-├── requirements.txt
-└── README.md
-```
-
----
-
-## Local Setup & Execution
-
-### 1. Clone & Create Virtual Environment
 ```bash
-cd forager-hubspot-enrichment
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-### 2. Configure Environment
-```bash
+pip install -e ".[dev]"
 cp .env.example .env
-# Edit .env with your FORAGER_API_KEY, HUBSPOT_ACCESS_TOKEN, and HUBSPOT_CLIENT_SECRET
+# Add FORAGER_API_KEY, FORAGER_ACCOUNT_ID, HUBSPOT_ACCESS_TOKEN, and MANUAL_API_KEY.
+uvicorn app.main:app --reload
 ```
 
-### 3. Start Application
+`HUBSPOT_CLIENT_SECRET` is additionally required for signed webhooks. Keep credentials in environment variables; never commit `.env`.
+
+## Test the API
+
+Health check:
+
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+curl -i http://localhost:8000/health
 ```
-Interactive OpenAPI documentation will be accessible at: `http://localhost:8000/docs`.
 
----
+Enrich a company and discover up to five contacts matching `ALLOWED_JOB_TITLES`:
 
-## Environment Configuration
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `FORAGER_API_KEY` | Yes | `""` | API key from app.forager.ai |
-| `FORAGER_BASE_URL` | No | `https://api-v2.forager.ai` | Base URL for Forager v2 |
-| `FORAGER_ACCOUNT_ID`| Yes | — | Numeric account ID shown on the Forager app's My Account page |
-| `HUBSPOT_ACCESS_TOKEN` | Yes | `""` | HubSpot Service Key with company/contact read and write scopes |
-| `HUBSPOT_CLIENT_SECRET` | For Webhooks | `""` | App client secret for SHA-256 HMAC signature validation |
-| `MANUAL_API_KEY` | Production | `""` | Bearer token for manual CRM write endpoints |
-| `HUBSPOT_BASE_URL` | No | `https://api.hubapi.com` | Base URL for HubSpot CRM |
-| `ALLOWED_JOB_TITLES` | No | `Software Engineer,VP of Engineering,CTO,Product Manager` | Comma-separated title filters |
-| `MAX_CONTACTS_PER_COMPANY` | No | `5` | Maximum contacts to discover per company |
-| `PORT` | No | `8000` | Port used by the local server |
-| `LOG_LEVEL` | No | `INFO` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`) |
-
----
-
-## Running Tests
-
-The test suite contains **46 unit and integration tests** testing field mapping, title filtering, candidate deduplication, webhook signature checks, retry deduplication, and mocked end-to-end flows. Tests use `respx` and never depend on live external credentials. These are not live provider integration tests.
-
-Run all tests:
 ```bash
-pytest -v
+curl -i -X POST http://localhost:8000/api/v1/enrich/company \
+  -H "Authorization: Bearer $MANUAL_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"domain":"example.com"}'
 ```
 
-Expected output:
-```
-tests/integration/test_company_enrichment.py::test_enrich_company_full_flow PASSED
-tests/integration/test_contact_enrichment.py::test_enrich_contact_full_flow PASSED
-tests/integration/test_webhooks.py::test_health_endpoint PASSED
-tests/integration/test_webhooks.py::test_root_endpoint PASSED
-tests/integration/test_webhooks.py::test_company_webhook_success_and_deduplication PASSED
-tests/integration/test_webhooks.py::test_company_webhook_retry_attempt_is_deduplicated PASSED
-tests/integration/test_webhooks.py::test_contact_webhook_signature_failure PASSED
-tests/unit/test_clients.py::test_forager_get_account_id_cached PASSED
-tests/unit/test_clients.py::test_forager_account_id_required PASSED
-tests/unit/test_clients.py::test_forager_search_organization_success PASSED
-tests/unit/test_clients.py::test_hubspot_get_company PASSED
-tests/unit/test_clients.py::test_hubspot_association_v4_success PASSED
-tests/unit/test_discovery.py (23 parameterized title tests) PASSED
-tests/unit/test_mapping.py (6 mapping & location tests) PASSED
-tests/unit/test_signatures.py (5 signature verification tests) PASSED
+Use a test company in a test HubSpot portal. The response reports changed company fields, discovered contacts, and provider errors. Missing source data stays blank; the service does not invent contact details.
 
-============================== 48 passed ==============================
-```
+HubSpot sends signed JSON event batches to `/webhooks/hubspot`. Configure both `company.creation` and `contact.creation` subscriptions to that URL. Requests with missing or invalid signatures return `401`; verify delivery by creating a test company/contact after setting `HUBSPOT_CLIENT_SECRET`.
 
-### Current Validation Snapshot (2026-10-26)
+Run automated tests:
 
-* Local automated suite: **48 passed** (mocked unit and integration tests).
-* Live local service: `/health`, `/docs`, and `/openapi.json` returned HTTP 200.
-* HubSpot schema preflight: all 10 required company properties and 11 required contact properties exist.
-* OpenAI demo company: HubSpot record `356231950027` is named `OpenAI` and uses `openai.com`. A provider lookup returned a conflicting company name during the latest live run, so the demo label was restored and the provider's company details should be reviewed before presenting them as verified enrichment.
-* Live contact discovery: the live Forager search for `openai.com` returned two CTO candidates, both already present in HubSpot; it returned **0 new profiles**. Five additional contacts were created as clearly labeled synthetic evaluation records (`Demo Forager Test Contact 01–05`) so the CRM workflow could be demonstrated without inventing real people. They have no email, phone, or LinkedIn data and are associated with the OpenAI test company. The company now has **10 associated contacts** (5 earlier records plus 5 synthetic test records). The earlier five-record field audit found **27 of 45** requested fields populated and **0 of 5** complete across all nine fields.
-* Environment: Forager API key/account ID and HubSpot Service Key are configured in the ignored `.env`. `HUBSPOT_CLIENT_SECRET` is blank; CRM enrichment works, but HubSpot-signed webhook requests cannot be validated until the app client secret is configured.
-* Webhook endpoints: both company and contact endpoints rejected unsigned local requests with HTTP 401. Mocked signature and retry/deduplication tests pass; signed live delivery still needs the HubSpot app client secret.
-* Vercel production: `https://forager-hubspot-enrichment.vercel.app` serves the FastAPI app and `/health` returns HTTP 200. The URL `https://forager-hubspot-enrichment-4rcnjndv1.vercel.app/` is protected by Vercel SSO and points to an older Ready deployment whose build output contains no FastAPI function; after authentication it returns Vercel's platform-level 404. Vercel reserves generated deployment URLs and refused assigning this one to the working deployment. Use the production alias above. An unauthenticated manual enrichment request returned HTTP 401 without calling HubSpot. Vercel access protection is enabled.
-
----
-
-## Features & Capabilities
-
-### Company Enrichment
-* Resolves company record from HubSpot by domain or record ID.
-* Queries Forager `organization_search`.
-* Normalizes firmographic attributes (`description`, `annualrevenue`, `numberofemployees`, `domain`, `website`, `linkedin_company_page`, `city`, `state`, `country`).
-* Preserves existing non-empty HubSpot data when provider data is missing.
-* Updates HubSpot record using `PATCH /crm/v3/objects/companies/{companyId}` without duplicate creation.
-
-### Contact Enrichment & Completeness
-* Resolves contact in HubSpot by ID, email, or LinkedIn URL.
-* Enriches via Forager email reverse lookup or person detail lookup.
-* Fetches verified direct dials and personal/work emails.
-* Parses multi-part city, state, country from OSM geolocation attributes.
-* **Never fabricates data**: Computes an audit report with completeness percentage (`populated_count`, `populated_fields`, `missing_count`, `missing_fields`).
-
-### Contact Discovery & Title Filtering
-* Configurable filtering using `ALLOWED_JOB_TITLES` env variable.
-* Case-insensitive matching with title variation and acronym expansion:
-  * `"CTO"` matches `"Chief Technology Officer"`, `"CTO & Co-Founder"`, `"Interim CTO"`.
-  * `"VP of Engineering"` matches `"Vice President of Engineering"`, `"VP Engineering"`, `"VP, Engineering"`.
-  * `"Software Engineer"` matches `"Staff Software Engineer"`, `"Senior Software Engineer"`, `"Principal Software Engineer"`.
-* Candidate deduplication by LinkedIn slug and email before inserting into CRM.
-* Searches HubSpot CRM before inserting to update existing records rather than duplicating.
-* Associates discovered contacts with the company using primary Contact-to-Company relationship.
-
-### Webhook Automation & Signature Verification
-* Current HubSpot v3 Webhook validation:
-  $$\text{HMAC-SHA256}(\text{client\_secret}, \text{HTTP\_METHOD} + \text{URI} + \text{BODY} + \text{TIMESTAMP})$$
-* Timestamp freshness check: Rejects requests older than 300 seconds (5 minutes) to defeat replay attacks.
-* Automatic fallback support for HubSpot v1 signature.
-* Fail-closed behavior: requests are rejected if the client secret is missing or the signature is invalid.
-* In-process delivery deduplication: repeated event IDs are skipped across retry attempts while the process is running.
-* Recursive update loop prevention: 30-second cooldown window prevents webhooks from reacting to our own CRM updates.
-
----
-
-## OpenAI Demo Records & Execution
-
-### 1. Pre-flight Schema Check
 ```bash
-python scripts/setup_hubspot.py
+pytest -q
 ```
 
-### 2. Populate OpenAI Company and 5 Enriched Contacts
-```bash
-python scripts/enrich_demo_company.py
-```
-This automated script:
-1. Locates or creates the OpenAI test company in HubSpot.
-2. Requests company attributes from Forager (`openai.com`). Review source accuracy before presenting provider values as verified company facts.
-3. Discovers up to 5 tech leaders/engineers matching the job-title filter.
-4. Enriches each person with available source details (email, phone, LinkedIn, city, state, country); missing fields remain blank rather than fabricated.
-5. Associates discovered contacts with the OpenAI company in HubSpot.
+## Production
 
-### 3. Run Validation Audit
-```bash
-python scripts/validate_demo_records.py
-```
-Outputs validation check results:
-* Verified company exists and is enriched.
-* 5 associated contacts exist.
-* Zero duplicate records.
-* Field completeness breakdown and missing field disclosure.
+Production URL: <https://forager-hubspot-enrichment.vercel.app>
 
----
+- `GET /health` returns `200` when the service is live.
+- Set `FORAGER_API_KEY`, `FORAGER_ACCOUNT_ID`, `HUBSPOT_ACCESS_TOKEN`, `HUBSPOT_CLIENT_SECRET`, `MANUAL_API_KEY`, and `APP_ENV=production` in Vercel project settings.
+- Configure HubSpot's company and contact creation webhooks to `https://forager-hubspot-enrichment.vercel.app/webhooks/hubspot`.
+- The production alias above is the working URL. The older generated deployment URL ending in `4rcnjndv1` is stale and returns a platform 404.
 
-## Vercel Deployment
+Vercel functions keep webhook deduplication state in memory. Use a durable queue and shared store before relying on retries across function instances.
 
-Vercel serves the FastAPI app from `app.main:app`; this project does not need a Dockerfile or Procfile. The production alias is `https://forager-hubspot-enrichment.vercel.app`, and Vercel access protection is enabled. The production `/health` endpoint returns HTTP 200.
+## Evaluation notes
 
-To deploy a future change, use the linked project and promote a successful FastAPI deployment:
-```bash
-vercel
-vercel --prod
-```
-
-Set the Forager key/account ID, HubSpot Service Key, `MANUAL_API_KEY`, `ALLOWED_JOB_TITLES`, `MAX_CONTACTS_PER_COMPANY`, `APP_ENV=production`, and `LOG_LEVEL=INFO` in the deployment environment. Keep the key values private. `HUBSPOT_CLIENT_SECRET` is not configured yet: add it to Vercel Production before testing signed HubSpot webhook delivery. Webhook requests fail closed with HTTP 401 until then.
-
-When signed delivery is ready, configure the HubSpot app URL as `https://forager-hubspot-enrichment.vercel.app/webhooks/hubspot` and subscribe to `company.creation` and `contact.creation`. Manual enrichment routes require `Authorization: Bearer <MANUAL_API_KEY>` in production.
-
----
-
-## Known Provider Limitations
-
-1. **Webhook worker and idempotency state are process-local:**
-   * FastAPI `BackgroundTasks` and the deduplication/cooldown caches are in memory. A new function instance does not share that state. Use a durable queue and shared store before relying on this for production delivery guarantees.
-2. **Personal Direct Dials & Cell Phones:**
-   * B2B providers do not always have verified mobile phone numbers for every individual due to privacy regulations (GDPR/CCPA). Where Forager returns no phone number, the field remains empty and is logged in `missing_fields`.
-3. **Work Email Async Enrichment:**
-   * Work email generation in Forager uses an asynchronous lookup job (`POST /api/v2/{account_id}/datastorage/person_contacts_lookup/work_emails/`) returning `202 Accepted`. Our client polls up to 3 times before falling back to personal emails or reporting missing.
-4. **LinkedIn Identifier Variations:**
-   * Some public profiles use alphanumeric hashes rather than named slugs. The integration automatically strips URL query parameters and handles both formats.
-
----
-
-## Forager Extra Fields for Team Discussion
-
-Forager returns rich signals that are not part of standard HubSpot CRM properties. These provide high GTM value if custom properties are created:
-
-1. **LinkedIn "About" Summary & Headline:**
-   * Useful for sales reps to see personal background directly on the contact timeline.
-2. **Detailed Skills List:**
-   * Returns specific technical competencies (e.g. `["PyTorch", "Distributed Training", "CUDA"]`).
-3. **Company Technographics & Web Technologies (`website_technologies`):**
-   * Detected CMS, analytics, hosting, and AI libraries.
-4. **Funding Events & Simple Events (`found_funding_events`):**
-   * Recent venture rounds, series, and investor signals for timing outreach.
-5. **Domain Rank & Traffic Metrics (`domain_rank`, `tranco_rank`):**
-   * Authority score to automatically tier inbound accounts into SMB, Mid-Market, and Enterprise.
-
----
-
-## Video Walkthrough
-
-The short, silent production walkthrough is saved at [`deliverables/forager-hubspot-walkthrough.mp4`](deliverables/forager-hubspot-walkthrough.mp4). It shows the production API routes and five HubSpot contacts marked `TEST`, with email and phone blank. They are synthetic CRM demo records, not Forager-sourced people. The latest Forager search returned no new profiles, and successful signed webhook delivery remains pending `HUBSPOT_CLIENT_SECRET`.
+The HubSpot portal contains clearly labeled synthetic test contacts. A live Forager search may return fewer than five genuinely new people; existing records are skipped, and unavailable email/phone/location fields remain empty. Signed webhook delivery is pending the HubSpot client secret.

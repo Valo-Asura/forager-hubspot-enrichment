@@ -170,25 +170,8 @@ class ContactEnrichmentReport(BaseModel):
 
 
 class EnrichCompanyRequest(BaseModel):
-    """Manual request payload to enrich a company."""
-    company_id: Optional[str] = None
-    domain: Optional[str] = None
-    discover_contacts: bool = True
-
-
-class EnrichContactRequest(BaseModel):
-    """Manual request payload to enrich a contact."""
-    contact_id: Optional[str] = None
-    email: Optional[str] = None
-    linkedin_url: Optional[str] = None
-
-
-class DiscoverContactsRequest(BaseModel):
-    """Request payload to discover contacts at a company."""
+    """Identify the company to enrich by its website domain."""
     domain: str
-    company_id: Optional[str] = None
-    job_titles: Optional[List[str]] = None
-    limit: Optional[int] = 5
 
 
 class HealthResponse(BaseModel):

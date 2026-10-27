@@ -29,7 +29,6 @@ class CompanyEnrichmentService:
         self,
         company_id: Optional[str] = None,
         domain: Optional[str] = None,
-        discover_contacts: bool = True,
     ) -> CompanyEnrichmentReport:
         """
         Enrich a HubSpot company using Forager data and optionally discover contacts.
@@ -111,7 +110,7 @@ class CompanyEnrichmentService:
 
         # 4. Discover and associate contacts if requested
         discovered_count = 0
-        if discover_contacts and target_company_id:
+        if target_company_id:
             try:
                 contacts = await self.discovery.discover_and_sync_contacts(
                     company_id=target_company_id,
