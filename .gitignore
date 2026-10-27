@@ -44,3 +44,6 @@ htmlcov/
 *.swp
 *.swo
 .DS_Store
+
+# Local exports and demo media
+deliverables/
