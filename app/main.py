@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Dict, List
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.clients.forager import ForagerClient
@@ -89,6 +90,12 @@ if not settings.HUBSPOT_ACCESS_TOKEN:
     logger.warning("HUBSPOT_ACCESS_TOKEN is not configured")
 if not settings.HUBSPOT_CLIENT_SECRET:
     logger.warning("HUBSPOT_CLIENT_SECRET is not configured; webhook requests will be rejected")
+
+
+@app.get("/", include_in_schema=False)
+async def docs_home() -> RedirectResponse:
+    """Send visitors to the API reference instead of a blank root page."""
+    return RedirectResponse(url="/docs")
 
 
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
